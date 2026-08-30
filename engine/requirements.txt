@@ -1,0 +1,13 @@
+# DIGMORE engine. NOTE: laion-clap pins numpy<2 — do not bump numpy.
+# torch (CPU) is installed separately in the Dockerfile from the CPU wheel index.
+fastapi
+uvicorn[standard]
+python-multipart
+laion-clap
+yt-dlp
+librosa
+soundfile
+numpy<2
+scipy
+requests
+beautifulsoup4
