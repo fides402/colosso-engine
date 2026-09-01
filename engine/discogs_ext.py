@@ -16,6 +16,7 @@ releases with fewer than ``min_votes`` votes (benefit of the doubt for crate
 gems) and only reject when there are enough votes AND the average is low. Set
 ``require_rating=True`` to demand a real rating.
 """
+import datetime
 import random
 import time
 
@@ -74,6 +75,18 @@ GENRE_MAP: dict[str, dict] = {
             {"genre": "Funk / Soul", "style": "Library Music"},
             {"genre": "Electronic", "style": "Library Music"},
         ],
+    },
+    "hiphop": {
+        "year_from": 1992,
+        "year_to": lambda: datetime.date.today().year,
+        "searches": [
+            {"genre": "Hip Hop"},
+            {"genre": "Hip Hop", "style": "Boom Bap"},
+            {"genre": "Hip Hop", "style": "Conscious"},
+            {"genre": "Hip Hop", "style": "Jazzy Hip-Hop"},
+            {"genre": "Hip Hop", "style": "Instrumental Hip Hop"},
+        ],
+        "exclude_styles": {"Pop Rap", "Trap", "Gangsta"},
     },
 }
 
@@ -140,6 +153,9 @@ def build_candidates(
     discogs_id,rating_avg,rating_count,cover_image}].
     """
     cfg = GENRE_MAP.get(profile, {"searches": [{"genre": ""}]})
+    year_from = cfg.get("year_from", YEAR_FROM)
+    year_to_value = cfg.get("year_to", YEAR_TO)
+    year_to = year_to_value() if callable(year_to_value) else year_to_value
     exclude_styles = {s.lower() for s in cfg.get("exclude_styles", set())}
     searches = cfg.get("searches") or [{"genre": cfg.get("genre", ""),
                                         "style": cfg.get("style", "")}]
@@ -158,8 +174,8 @@ def build_candidates(
             batch = dh.search_releases(
                 genre=s.get("genre", ""),
                 style=s.get("style", ""),
-                year_from=YEAR_FROM,
-                year_to=YEAR_TO,
+                year_from=year_from,
+                year_to=year_to,
                 max_have=max_have,
                 n=per_search,
                 exclude_ids=exclude_ids,

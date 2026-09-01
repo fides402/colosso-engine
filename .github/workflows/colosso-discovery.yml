@@ -1,6 +1,6 @@
 name: colosso-discovery
 
-# Runs one DIGMORE playlist generation for a profile (jazz/soul/ost) entirely
+# Runs one DIGMORE playlist generation for a profile (jazz/soul/ost/hiphop) entirely
 # in the cloud, so it never depends on the home PC being on. Triggered by the
 # diggaplayer Android app via the GitHub REST API (workflow_dispatch), which
 # then polls this run to completion and reads back results/latest-<profile>.json
@@ -35,7 +35,7 @@ on:
         description: "Macrogenre profile"
         required: true
         type: choice
-        options: [jazz, soul, ost]
+        options: [jazz, soul, ost, hiphop]
       target:
         description: "How many tracks to accept before stopping"
         required: false
@@ -67,24 +67,40 @@ jobs:
       - name: Publish results (commit to the repo — artifact storage quota is exhausted)
         if: always()
         run: |
-          mkdir -p results
-          if [ -f digmore-out.json ]; then
-            cp digmore-out.json "results/latest-${{ inputs.profile }}.json"
-          else
-            echo '{"profile":"${{ inputs.profile }}","status":"error","results":[]}' \
-              > "results/latest-${{ inputs.profile }}.json"
-          fi
           git config user.name "colosso-bot"
           git config user.email "colosso-bot@users.noreply.github.com"
-          git add "results/latest-${{ inputs.profile }}.json"
-          if git diff --cached --quiet; then
-            echo "no change to publish"
-            exit 0
-          fi
-          git commit -m "results: ${{ inputs.profile }} (run ${{ github.run_id }})"
           for i in 1 2 3 4 5; do
-            git push origin HEAD:main && exit 0
             git fetch origin main
-            git rebase origin/main
+            git checkout -B publish origin/main
+            mkdir -p results
+            python - <<'PY'
+          import json
+          from pathlib import Path
+
+          profile = "${{ inputs.profile }}"
+          incoming_path = Path("digmore-out.json")
+          output_path = Path(f"results/latest-{profile}.json")
+          if not incoming_path.exists():
+              payload = {"profile": profile, "status": "error", "results": []}
+          else:
+              incoming = json.loads(incoming_path.read_text(encoding="utf-8"))
+              previous = []
+              if output_path.exists():
+                  previous = json.loads(output_path.read_text(encoding="utf-8")).get("results", [])
+              merged = {}
+              for item in previous + incoming.get("results", []):
+                  key = (item.get("artist", "").strip().casefold(), item.get("title", "").strip().casefold())
+                  if all(key):
+                      merged[key] = item
+              payload = {"profile": profile, "status": "done", "results": list(merged.values())[-150:]}
+          output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          PY
+            git add "results/latest-${{ inputs.profile }}.json"
+            if git diff --cached --quiet; then
+              echo "no change to publish"
+              exit 0
+            fi
+            git commit -m "results: ${{ inputs.profile }} (run ${{ github.run_id }})"
+            git push origin HEAD:main && exit 0
           done
           exit 1
