@@ -83,6 +83,17 @@ def collect_candidates(profile: str, target: int, seen_path: str) -> list[dict]:
     OVERSHOOT = 2
     MAX_ROUNDS = 12
     want = max(target * OVERSHOOT, 30)
+    # Wall-clock safety valve, not just a round count: the artist/album cap below can leave
+    # `added` small-but-nonzero every round once seen-<profile>.json's history is large
+    # enough that most fresh candidates get discarded for variety rather than for being
+    # exact repeats -- that never trips the "added == 0" early-break, so without this a run
+    # could grind through all MAX_ROUNDS and approach the workflow's 15-minute job timeout
+    # as history keeps growing across runs. The product requirement (2026-09-07) is that
+    # the user never waits on this either way (loadCachedDiscovery/fallback tiers already
+    # guarantee that), but a run that times out instead of publishing SOMETHING still means
+    # one less refill the phone could have used, so it stops itself well short of that wall.
+    TIME_BUDGET_SECONDS = 480  # 8 minutes, comfortably under the 15-minute job timeout
+    t0 = time.time()
 
     # Reported live 2026-09-06: "the same artists or tracks from the same album keep coming
     # back". seen_keys (above) only ever stops the EXACT same track from resurfacing — it
@@ -103,6 +114,10 @@ def collect_candidates(profile: str, target: int, seen_path: str) -> list[dict]:
 
     for rnd in range(1, MAX_ROUNDS + 1):
         if len(results) >= want:
+            break
+        if time.time() - t0 > TIME_BUDGET_SECONDS:
+            print(f"round {rnd}: stopping early, time budget ({TIME_BUDGET_SECONDS}s) exceeded "
+                  f"(total {len(results)}/{want})", flush=True)
             break
         cands, diag = discogs_ext.build_candidates(
             profile,
