@@ -59,10 +59,24 @@ jobs:
       - name: Generate playlist
         working-directory: engine
         run: |
+          mkdir -p "${{ github.workspace }}/results"
+          # --seen points at a scratch path OUTSIDE results/, never at the tracked file
+          # directly: the publish step below does `git checkout -B publish origin/main`
+          # per retry attempt, which refuses to run over an uncommitted local modification
+          # to a tracked file (exactly the failure mode a straight results/seen-*.json
+          # write here would hit on this profile's second real run). Seed it from whatever
+          # is already committed so generate_cli.py still excludes real history; the
+          # publish step re-merges this scratch file against the FRESHEST committed
+          # version (handles a concurrent run the same way it already does for
+          # results/latest-<profile>.json).
+          if [ -f "${{ github.workspace }}/results/seen-${{ inputs.profile }}.json" ]; then
+            cp "${{ github.workspace }}/results/seen-${{ inputs.profile }}.json" "${{ github.workspace }}/seen-delta-${{ inputs.profile }}.json"
+          fi
           python generate_cli.py \
             --profile "${{ inputs.profile }}" \
             --target "${{ inputs.target }}" \
-            --out "${{ github.workspace }}/digmore-out.json"
+            --out "${{ github.workspace }}/digmore-out.json" \
+            --seen "${{ github.workspace }}/seen-delta-${{ inputs.profile }}.json"
 
       - name: Publish results (commit to the repo — artifact storage quota is exhausted)
         if: always()
@@ -94,8 +108,32 @@ jobs:
                       merged[key] = item
               payload = {"profile": profile, "status": "done", "results": list(merged.values())[-150:]}
           output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+          # Same merge-against-freshest-committed-state pattern as latest-<profile>.json
+          # above, for the seen-releases/seen-tracks history: union whatever is already
+          # committed on this (freshly checked-out) origin/main with the scratch delta
+          # generate_cli.py just produced (which was seeded from a possibly slightly
+          # stale copy — see the Generate playlist step). Written regardless of whether
+          # this run's generation succeeded (generate_cli.py's save_seen always runs), so
+          # a partial run's exploration still counts against future ones.
+          delta_path = Path("${{ github.workspace }}/seen-delta-${{ inputs.profile }}.json")
+          seen_path = Path(f"results/seen-{profile}.json")
+          if delta_path.exists():
+              delta = json.loads(delta_path.read_text(encoding="utf-8"))
+              fresh = json.loads(seen_path.read_text(encoding="utf-8")) if seen_path.exists() else {}
+              release_ids = set(fresh.get("release_ids", [])) | set(delta.get("release_ids", []))
+              track_keys = {tuple(k) for k in fresh.get("track_keys", [])} | \
+                  {tuple(k) for k in delta.get("track_keys", [])}
+              MAX_HISTORY = 20_000
+              seen_path.write_text(json.dumps({
+                  "release_ids": list(release_ids)[-MAX_HISTORY:],
+                  "track_keys": [list(k) for k in list(track_keys)[-MAX_HISTORY:]],
+              }), encoding="utf-8")
           PY
             git add "results/latest-${{ inputs.profile }}.json"
+            if [ -f "results/seen-${{ inputs.profile }}.json" ]; then
+              git add "results/seen-${{ inputs.profile }}.json"
+            fi
             if git diff --cached --quiet; then
               echo "no change to publish"
               exit 0
